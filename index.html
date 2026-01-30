@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Annuaire Professionnel</title>
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary:'#be185d',
+            secondary:'#fce7f3',
+            accent:'#fde8f2'
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- Police Google -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :focus-visible{
+      outline:3px solid #be185d;
+      outline-offset:2px
+    }
+  </style>
+</head>
+
+<body class="bg-accent font-['Roboto'] text-gray-800">
+
+  <header class="bg-primary text-white py-12 shadow-lg">
+    <div class="container mx-auto px-4 text-center">
+      <h1 class="text-5xl font-extrabold tracking-tight drop-shadow-lg">
+        Annuaire <span class="text-secondary">Professionnel</span>
+      </h1>
+      <p class="mt-2 text-lg opacity-90">Trouvez votre expert en quelques clics</p>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-4 py-8">
+    <form id="filters" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+      <input id="searchInput" placeholder="Rechercher (nom, structure, commune...)" class="w-full p-3 border-2 border-primary rounded-xl" />
+      <select id="professionFilter" class="w-full p-3 border-2 border-primary rounded-xl">
+        <option value="">Toutes les professions</option>
+      </select>
+      <select id="communeFilter" class="w-full p-3 border-2 border-primary rounded-xl">
+        <option value="">Toutes les communes</option>
+      </select>
+    </form>
+
+    <div id="resultCount" class="text-right text-sm text-gray-600 mb-4"></div>
+
+    <div id="library" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"></div>
+
+    <nav id="pagination" class="flex justify-center items-center space-x-2 mt-8" aria-label="Pagination"></nav>
+  </main>
+
+  <script>
+    const ITEMS_PER_PAGE = 20;
+    let currentPage = 1;
+    let data = [], filteredData = [];
+
+    // === mapping EXACT de tes colonnes Excel/JSON ===
+    const KEYMAP = {
+      titre:       ['titre','Titre'],
+      nom:         ['Nom du professionnel','nom','Nom','NOM'],
+      prenom:      ['Prénom','prenom','Prenom','PRÉNOM','PRENOM'],
+      profession:  ['Métier / spécialité','Profession','profession'],
+      structure:   ['Nom de la structure ou cabinet','Structure','structure'],
+      tel_pro:     ['N° téléphone','Téléphone','Telephone','tel','Tel','Tel_pro','tel_pro'],
+      email:       ['Email','email','Email_1','email_1','Mail','mail'],
+      rue:         ['adresse','Adresse','Rue','rue'],
+      code_postal: ['code postal','Code_postal','CP','Code Postal','Code_Postal','cp'],
+      commune:     ['ville','Ville','Commune','commune'],
+      site_web:    ['Site web','site','Site','URL','Url','site_web']
+    };
+
+    const get = (o,k,f='') => {
+      const ks = KEYMAP[k] || [k];
+      for(const x of ks){
+        if(o && o[x] != null && o[x] !== '' ) return String(o[x]);
+      }
+      return f;
+    };
+    const norm = s => (s||'').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
+
+    async function loadData(){
+      try{
+        // IMPORTANT : chemin relatif pour Azure SWA
+        const r = await fetch('./annuaire_pro.json', { cache:'no-store' });
+
+        if(!r.ok) throw new Error('HTTP '+r.status);
+
+        const raw = await r.json();
+        data = Array.isArray(raw) ? raw : (raw?.data || raw?.items || []);
+
+        if(!Array.isArray(data)) throw new Error("JSON non conforme (attendu: tableau d'objets)");
+
+        populateFilters();
+        applyFilters();
+      }catch(e){
+        document.getElementById('library').innerHTML =
+          `<p class="text-center text-red-600">Erreur : ${e.message}</p>`;
+        console.error(e);
+      }
+    }
+
+    function populateFilters(){
+      const pSel=document.getElementById('professionFilter');
+      const cSel=document.getElementById('communeFilter');
+      const professions=[...new Set(data.map(i=>get(i,'profession')).filter(Boolean))].sort();
+      const communes=[...new Set(data.map(i=>get(i,'commune')).filter(Boolean))].sort();
+      professions.forEach(p=>pSel.add(new Option(p,p)));
+      communes.forEach(c=>cSel.add(new Option(c,c)));
+    }
+
+    function applyFilters(){
+      const q = norm(document.getElementById('searchInput').value.trim());
+      const p = document.getElementById('professionFilter').value;
+      const c = document.getElementById('communeFilter').value;
+      const tokens = q.split(/\s+/).filter(Boolean);
+
+      filteredData = data.filter(i=>{
+        const hay = [
+          get(i,'titre'),
+          get(i,'nom'),
+          get(i,'prenom'),
+          get(i,'profession'),
+          get(i,'structure'),
+          get(i,'rue'),
+          get(i,'code_postal'),
+          get(i,'commune')
+        ].map(norm).join(' ');
+
+        const matchTokens = tokens.length===0 || tokens.every(t=>hay.includes(t));
+        return matchTokens && (!p || get(i,'profession')===p) && (!c || get(i,'commune')===c);
+      });
+
+      displayPage(1);
+    }
+
+    function displayPage(page){
+      currentPage=page;
+      const start=(page-1)*ITEMS_PER_PAGE, end=start+ITEMS_PER_PAGE;
+      const slice=filteredData.slice(start,end);
+      const lib=document.getElementById('library');
+
+      lib.innerHTML='';
+      document.getElementById('resultCount').textContent =
+        `${filteredData.length} résultat${filteredData.length>1?'s':''}`;
+
+      if(slice.length===0){
+        lib.innerHTML =
+          `<p class="text-center text-gray-500 col-span-full">Aucun résultat trouvé.</p>`;
+        document.getElementById('pagination').innerHTML='';
+        return;
+      }
+
+      slice.forEach(i=>{
+        const card=document.createElement('div');
+        card.className='bg-white p-6 rounded-2xl shadow hover:shadow-2xl transition';
+        const nomAff = [get(i,'titre',''), get(i,'nom',''), get(i,'prenom','')]
+                        .filter(Boolean).join(' ').trim();
+        const adrAff = [get(i,'rue',''), get(i,'code_postal',''), get(i,'commune','')]
+                        .filter(Boolean).join(', ').replace(', ,', ', ');
+
+        card.innerHTML = `
+          <h3 class="text-xl font-semibold text-primary mb-2">${nomAff || '—'}</h3>
+          <p><b>Profession :</b> ${get(i,'profession','Non spécifié')}</p>
+          ${get(i,'structure') ? `<p><b>Structure :</b> ${get(i,'structure')}</p>` : ''}
+          <p><b>Adresse :</b> ${adrAff || '—'}</p>
+          <p><b>Téléphone :</b> ${get(i,'tel_pro','Non spécifié')}</p>
+          ${get(i,'email') ? `<p><b>Email :</b> ${get(i,'email')}</p>` : ''}
+        `;
+        lib.appendChild(card);
+      });
+
+      updatePagination();
+    }
+
+    function updatePagination(){
+      const totalPages=Math.ceil(filteredData.length/ITEMS_PER_PAGE)||1;
+      const pag=document.getElementById('pagination');
+      pag.innerHTML='';
+
+      const mk=(label,disabled,fn)=>{
+        const b=document.createElement('button');
+        b.textContent=label;
+        b.disabled=disabled;
+        b.className=`px-3 py-2 rounded ${disabled
+          ?'bg-gray-300 text-gray-600'
+          :'bg-primary text-white hover:bg-secondary hover:text-primary'}`;
+        b.onclick=fn;
+        pag.appendChild(b);
+      };
+
+      mk('« Précédent', currentPage===1, ()=>displayPage(currentPage-1));
+      for(let i=1;i<=totalPages;i++){
+        mk(String(i), i===currentPage, ()=>displayPage(i));
+      }
+      mk('Suivant »', currentPage===totalPages, ()=>displayPage(currentPage+1));
+    }
+
+    document.getElementById('searchInput').addEventListener('input', applyFilters);
+    document.getElementById('professionFilter').addEventListener('change', applyFilters);
+    document.getElementById('communeFilter').addEventListener('change', applyFilters);
+
+    loadData();
+  </script>
+
+</body>
+</html>
